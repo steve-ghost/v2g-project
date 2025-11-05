@@ -21,7 +21,6 @@ def set_korean_font():
     else:
         plt.rcParams["axes.unicode_minus"] = False
 
-
 set_korean_font()
 # =========================
 
@@ -211,27 +210,27 @@ def main():
         )
     st.pyplot(fig)
 
-    # ===== 2) 워터폴 =====
+    # ===== 2) 연도별 순현금흐름 (막대) =====
     st.subheader("연도별 순현금흐름")
-
     x_labels = [f"{y}년" for y in years]
 
-    wf = go.Figure(
-        go.Waterfall(
-            name="연도별 현금흐름",
-            orientation="v",
-            x=x_labels,
-            measure=["relative"] * len(years),
-            y=yearly_cash,
-            text=[f"{v:,.0f}원" for v in yearly_cash],
-            textposition="outside",
-        )
+    # 색깔: 첫해(혹은 음수)는 빨강, 나머지 플러스는 파랑
+    colors = ["red" if v < 0 else "royalblue" for v in yearly_cash]
+
+    bar_fig = go.Figure(
+        data=[
+            go.Bar(
+                x=x_labels,
+                y=yearly_cash,
+                marker_color=colors,
+            )
+        ]
     )
 
-    # 손익분기 연도 세로선 추가
+    # 손익분기 연도 세로선
     if break_even_year is not None:
         be_label = f"{break_even_year}년"
-        wf.add_shape(
+        bar_fig.add_shape(
             type="line",
             x0=be_label,
             x1=be_label,
@@ -241,7 +240,7 @@ def main():
             yref="paper",
             line=dict(color="green", width=2, dash="dash"),
         )
-        wf.add_annotation(
+        bar_fig.add_annotation(
             x=be_label,
             y=1,
             xref="x",
@@ -252,11 +251,12 @@ def main():
             font=dict(color="green"),
         )
 
-    wf.update_layout(
+    bar_fig.update_layout(
         title="연도별 순현금흐름",
         yaxis=dict(tickformat=","),
+        bargap=0.3,
     )
-    st.plotly_chart(wf, use_container_width=True)
+    st.plotly_chart(bar_fig, use_container_width=True)
 
     # ===== 표 =====
     st.subheader("연도별 금액 확인")
@@ -271,33 +271,7 @@ def main():
             "CAPEX(원)": cf_data["capex_list"],
         }
     )
-
-    # 행별로 색 칠하기
-    def highlight_row(row):
-        styles = [""] * len(row)
-        # 순현금흐름이 플러스인 해
-        if row["순현금흐름(원)"] > 0:
-            styles[df_table.columns.get_loc("순현금흐름(원)")] = "background-color: #e6f4ea"
-        # 누적이 0 이상인 해 (손익분기 넘은 뒤)
-        if row["누적(원)"] >= 0:
-            styles[df_table.columns.get_loc("누적(원)")] = "background-color: #c8f7c5"
-        return styles
-
-    styled = (
-        df_table.style.apply(highlight_row, axis=1)
-        .format(
-            {
-                "순현금흐름(원)": "{:,.0f}".format,
-                "누적(원)": "{:,.0f}".format,
-                "PV 수입(원)": "{:,.0f}".format,
-                "V2G 수입(원)": "{:,.0f}".format,
-                "O&M 비용(원)": "{:,.0f}".format,
-                "CAPEX(원)": "{:,.0f}".format,
-            }
-        )
-    )
-
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(df_table, use_container_width=True)
 
 
 if __name__ == "__main__":
