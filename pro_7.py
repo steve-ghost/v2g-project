@@ -185,10 +185,9 @@ def main():
         col1.metric("손익분기 연도", f"{break_even_year}년")
     else:
         col1.metric("손익분기 연도", "아직 미도달")
-
-    # 여기서 반올림해서 정수로 만들기
-    last_total = int(round(cumulative[-1]))
-    col2.metric("마지막 연도 누적", f"{cumulative[-1]:,} 원")
+    
+    val_str = "{:,.0f}".format(cumulative[-1])  # 소수점 0자리로 강제
+    col2.metric("마지막 연도 누적", f"{val_str} 원")
 
     # ===== 1) 누적 현금흐름 (matplotlib) =====
     st.subheader("누적 현금흐름")
