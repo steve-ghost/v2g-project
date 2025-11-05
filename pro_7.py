@@ -82,7 +82,7 @@ def build_yearly_cashflows(install_year: int, current_year: int, p: dict):
         revenue_v2g_y = annual_v2g_kwh * v2g_price_y
         annual_revenue_y = revenue_pv_y + revenue_v2g_y
 
-        om_y = annual_om_cost
+        om_y = p["om_ratio"] * capex_total
         capex_y = capex_total if i == 0 else 0
 
         cf = annual_revenue_y - om_y - capex_y
@@ -187,7 +187,7 @@ def main():
     else:
         col1.metric("손익분기 연도", "아직 미도달")
 
-    val_str = "{:,.0f}".format(cumulative[-1])  # 소수점 0자리로 강제
+    val_str = "{:,.0f}".format(cumulative[-1])
     col2.metric("마지막 연도 누적", f"{val_str} 원")
 
     # ===== 1) 누적 현금흐름 (matplotlib) =====
@@ -211,31 +211,28 @@ def main():
         )
     st.pyplot(fig)
 
-    # ===== 2) 연도별 순현금흐름 (누적 워터폴) =====
-    st.subheader("연도별 순현금흐름 (누적)")
+    # ===== 2) 연도별 순현금흐름 (누적 막대) =====
+    st.subheader("연도별 순현금흐름 (누적 막대)")
 
     x_labels = [f"{y}년" for y in years]
-
-    # 손익분기 전까지는 빨간색, 그 이후는 파란색
     colors = ["red" if cum < 0 else "royalblue" for cum in cumulative]
 
-    wf = go.Figure(
-        go.Waterfall(
-            name="누적 현금흐름",
-            orientation="v",
-            x=x_labels,
-            measure=["absolute"] * len(years),  # 누적 값을 그대로 높이로
-            y=cumulative,
-            text=[f"{v:,.0f}원" for v in cumulative],
-            textposition="outside",
-            marker={"color": colors},
-        )
+    bar_fig = go.Figure(
+        data=[
+            go.Bar(
+                x=x_labels,
+                y=cumulative,
+                marker=dict(color=colors),
+                text=[f"{v:,.0f}원" for v in cumulative],
+                textposition="outside",
+            )
+        ]
     )
 
-    # 손익분기 연도 세로선
+    # 손익분기 세로선
     if break_even_year is not None:
         be_label = f"{break_even_year}년"
-        wf.add_shape(
+        bar_fig.add_shape(
             type="line",
             x0=be_label,
             x1=be_label,
@@ -245,7 +242,7 @@ def main():
             yref="paper",
             line=dict(color="green", width=2, dash="dash"),
         )
-        wf.add_annotation(
+        bar_fig.add_annotation(
             x=be_label,
             y=1,
             xref="x",
@@ -256,11 +253,12 @@ def main():
             font=dict(color="green"),
         )
 
-    wf.update_layout(
-        title="연도별 순현금흐름 (누적 형태)",
+    bar_fig.update_layout(
+        title="연도별 순현금흐름 (누적)",
         yaxis=dict(tickformat=","),
+        bargap=0.25,
     )
-    st.plotly_chart(wf, use_container_width=True)
+    st.plotly_chart(bar_fig, use_container_width=True)
 
     # ===== 표 =====
     st.subheader("연도별 금액 확인")
