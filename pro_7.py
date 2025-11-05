@@ -195,7 +195,7 @@ def main():
     total_co2_kg = total_clean_kwh * EMISSION_FACTOR_KG_PER_KWH  # kgCO2e
 
     # ===== KPI (왼쪽으로 몰기 위해 4칸) =====
-    col1, col2, col3, col_spacer = st.columns([1, 1, 1, 2])
+    col1, col2, col3, col_spacer = st.columns([1, 1, 1, 1])
 
     if break_even_year is not None:
         col1.metric("손익분기 연도", f"{break_even_year}년")
