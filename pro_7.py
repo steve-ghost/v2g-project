@@ -308,9 +308,7 @@ def main():
             "PV 수입(원)": cf_data["pv_revenues"],
             "V2G 수입(원)": cf_data["v2g_revenues"],
             "O&M 비용(원)": cf_data["om_costs"],
-            "CAPEX(원)": cf_data["capex_list"],
-            "연간 PV 잉여(kWh)": [cf_data["annual_pv_surplus_kwh"]] * len(years),
-            "연간 V2G 방전(kWh)": [cf_data["annual_v2g_kwh"]] * len(years),
+            "CAPEX(원)": cf_data["capex_list"]
         }
     )
     st.dataframe(df_table, use_container_width=True)
