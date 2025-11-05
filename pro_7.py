@@ -110,7 +110,7 @@ def won_formatter(x, pos):
 
 
 def main():
-    st.title("V2G 현금흐름 대시보드")
+    st.title("V2G 투자 대비 연도별/누적 현금흐름")
 
     params = make_v2g_model_params()
 
@@ -185,6 +185,9 @@ def main():
         col1.metric("손익분기 연도", f"{break_even_year}년")
     else:
         col1.metric("손익분기 연도", "아직 미도달")
+
+    # 여기서 반올림해서 정수로 만들기
+    last_total = int(round(cumulative[-1]))
     col2.metric("마지막 연도 누적", f"{cumulative[-1]:,} 원")
 
     # ===== 1) 누적 현금흐름 (matplotlib) =====
@@ -209,7 +212,7 @@ def main():
     st.pyplot(fig)
 
     # ===== 2) 워터폴 =====
-    st.subheader("연도별 순현금흐름 워터폴")
+    st.subheader("연도별 순현금흐름")
     wf = go.Figure(
         go.Waterfall(
             name="연도별 현금흐름",
@@ -228,7 +231,7 @@ def main():
     st.plotly_chart(wf, use_container_width=True)
 
     # ===== 표 =====
-    st.subheader("연도별 값 확인")
+    st.subheader("연도별 금액 확인")
     df_table = pd.DataFrame(
         {
             "연도": years,
