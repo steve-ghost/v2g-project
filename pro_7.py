@@ -216,6 +216,9 @@ def main():
 
     x_labels = [f"{y}년" for y in years]
 
+    # 손익분기 전까지는 빨간색, 그 이후는 파란색
+    colors = ["red" if cum < 0 else "royalblue" for cum in cumulative]
+
     wf = go.Figure(
         go.Waterfall(
             name="누적 현금흐름",
@@ -225,8 +228,7 @@ def main():
             y=cumulative,
             text=[f"{v:,.0f}원" for v in cumulative],
             textposition="outside",
-            decreasing={"marker": {"color": "red"}},
-            increasing={"marker": {"color": "royalblue"}},
+            marker={"color": colors},
         )
     )
 
