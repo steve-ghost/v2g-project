@@ -21,6 +21,7 @@ def set_korean_font():
     else:
         plt.rcParams["axes.unicode_minus"] = False
 
+
 set_korean_font()
 # =========================
 
@@ -185,7 +186,7 @@ def main():
         col1.metric("손익분기 연도", f"{break_even_year}년")
     else:
         col1.metric("손익분기 연도", "아직 미도달")
-    
+
     val_str = "{:,.0f}".format(cumulative[-1])  # 소수점 0자리로 강제
     col2.metric("마지막 연도 누적", f"{val_str} 원")
 
@@ -270,7 +271,33 @@ def main():
             "CAPEX(원)": cf_data["capex_list"],
         }
     )
-    st.dataframe(df_table)
+
+    # 행별로 색 칠하기
+    def highlight_row(row):
+        styles = [""] * len(row)
+        # 순현금흐름이 플러스인 해
+        if row["순현금흐름(원)"] > 0:
+            styles[df_table.columns.get_loc("순현금흐름(원)")] = "background-color: #e6f4ea"
+        # 누적이 0 이상인 해 (손익분기 넘은 뒤)
+        if row["누적(원)"] >= 0:
+            styles[df_table.columns.get_loc("누적(원)")] = "background-color: #c8f7c5"
+        return styles
+
+    styled = (
+        df_table.style.apply(highlight_row, axis=1)
+        .format(
+            {
+                "순현금흐름(원)": "{:,.0f}".format,
+                "누적(원)": "{:,.0f}".format,
+                "PV 수입(원)": "{:,.0f}".format,
+                "V2G 수입(원)": "{:,.0f}".format,
+                "O&M 비용(원)": "{:,.0f}".format,
+                "CAPEX(원)": "{:,.0f}".format,
+            }
+        )
+    )
+
+    st.dataframe(styled, use_container_width=True)
 
 
 if __name__ == "__main__":
