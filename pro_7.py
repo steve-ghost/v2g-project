@@ -212,17 +212,45 @@ def main():
 
     # ===== 2) 워터폴 =====
     st.subheader("연도별 순현금흐름")
+
+    x_labels = [f"{y}년" for y in years]
+
     wf = go.Figure(
         go.Waterfall(
             name="연도별 현금흐름",
             orientation="v",
-            x=[f"{y}년" for y in years],
+            x=x_labels,
             measure=["relative"] * len(years),
             y=yearly_cash,
             text=[f"{v:,.0f}원" for v in yearly_cash],
             textposition="outside",
         )
     )
+
+    # 손익분기 연도 세로선 추가
+    if break_even_year is not None:
+        be_label = f"{break_even_year}년"
+        wf.add_shape(
+            type="line",
+            x0=be_label,
+            x1=be_label,
+            y0=0,
+            y1=1,
+            xref="x",
+            yref="paper",
+            line=dict(color="green", width=2, dash="dash"),
+        )
+        wf.add_annotation(
+            x=be_label,
+            y=1,
+            xref="x",
+            yref="paper",
+            text=f"손익분기 {break_even_year}년",
+            showarrow=False,
+            yanchor="bottom",
+            font=dict(color="green"),
+        )
+
     wf.update_layout(
         title="연도별 순현금흐름",
         yaxis=dict(tickformat=","),
