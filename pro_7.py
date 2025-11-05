@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import matplotlib.font_manager as fm
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
 
 
@@ -12,17 +11,14 @@ import pandas as pd
 # 1. 한글 폰트: repo에 올려둔 NanumGothic.ttf 강제 사용
 # =========================
 def set_korean_font():
-    # app.py 있는 폴더 기준으로 폰트 찾기
     base_dir = os.path.dirname(os.path.abspath(__file__))
     font_path = os.path.join(base_dir, "NanumGothic.ttf")
 
     if os.path.exists(font_path):
-        # matplotlib에 폰트 등록
         fm.fontManager.addfont(font_path)
         plt.rcParams["font.family"] = "NanumGothic"
         plt.rcParams["axes.unicode_minus"] = False
     else:
-        # 폰트가 없으면 일단 마이너스만 안깨지게
         plt.rcParams["axes.unicode_minus"] = False
 
 set_korean_font()
@@ -76,22 +72,18 @@ def build_yearly_cashflows(install_year: int, current_year: int, p: dict):
 
     cum = 0
     for i, year in enumerate(years):
-        # 연도별 단가
         pv_price_y = price_with_cagr(
             p["pv_base_price"], p["tariff_base_year"], year, p["price_cagr"]
         )
         v2g_price_y = pv_price_y + p["v2g_price_gap"]
 
-        # 수입
         revenue_pv_y = annual_pv_surplus_kwh * pv_price_y
         revenue_v2g_y = annual_v2g_kwh * v2g_price_y
         annual_revenue_y = revenue_pv_y + revenue_v2g_y
 
-        # 비용
         om_y = annual_om_cost
         capex_y = capex_total if i == 0 else 0
 
-        # 순현금
         cf = annual_revenue_y - om_y - capex_y
         cum += cf
 
@@ -203,7 +195,7 @@ def main():
     ax.set_ylabel("누적 금액(원)")
     ax.yaxis.set_major_formatter(FuncFormatter(won_formatter))
     ax.grid(True, linestyle="--", alpha=0.4)
-    ax.set_title("연도별 누적 현금흐름")
+    ax.set_title("V2G 투자 대비 연도별/누적 현금흐름")
     if break_even_year is not None:
         ax.axvline(break_even_year, color="green", linestyle="--", alpha=0.7)
         ax.text(
@@ -235,28 +227,7 @@ def main():
     )
     st.plotly_chart(wf, use_container_width=True)
 
-    # ===== 3) 연도별 수입/비용 구성 =====
-    st.subheader("연도별 수입/비용 구성")
-    stack_df = pd.DataFrame(
-        {
-            "year": years,
-            "PV 수입": cf_data["pv_revenues"],
-            "V2G 수입": cf_data["v2g_revenues"],
-            "O&M 비용": [-v for v in cf_data["om_costs"]],
-            "CAPEX": [-v for v in cf_data["capex_list"]],
-        }
-    )
-    fig_stack = px.bar(
-        stack_df,
-        x="year",
-        y=["PV 수입", "V2G 수입", "O&M 비용", "CAPEX"],
-        title="연도별 수입/비용 구성",
-        labels={"value": "금액(원)", "year": "연도"},
-    )
-    fig_stack.update_layout(barmode="relative", yaxis_tickformat=",")
-    st.plotly_chart(fig_stack, use_container_width=True)
-
-    # ===== 4) 표 =====
+    # ===== 표 =====
     st.subheader("연도별 값 확인")
     df_table = pd.DataFrame(
         {
