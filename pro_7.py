@@ -270,16 +270,19 @@ def main():
 
     params = make_v2g_model_params()
 
-    # ✅ jeju.csv 업로드 처리
+    # ----- PV 데이터 업로드 -----
     uploaded = st.sidebar.file_uploader("jeju.csv 업로드", type=["csv"])
 
-if uploaded is not None:
+    if uploaded is None:
+        st.warning("jeju.csv 파일을 업로드해주세요.")
+        return   # ✅ 이 return은 반드시 main() 내부여야 함.
+
+    # ✅ 업로드된 파일 읽기
     hourly_pv = generate_hourly_pv_kwh_from_jeju_csv(
         uploaded, pv_kw=params["pv_capacity_kw"]
     )
-else:
-    st.warning("jeju.csv 파일을 업로드해주세요.")
-    return
+    params["pv_annual_kwh"] = hourly_pv.sum()
+
 
 
 
