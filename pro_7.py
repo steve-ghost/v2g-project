@@ -256,27 +256,27 @@ def main():
     params["pv_annual_kwh"] = hourly_pv.sum()
 
 
-if uploaded is not None:
-    hourly_pv = generate_hourly_pv_kwh_from_jeju_csv(uploaded, pv_kw=params["pv_capacity_kw"])
-    annual_pv_from_pvlib = hourly_pv.sum()
+    if uploaded is not None:
+        hourly_pv = generate_hourly_pv_kwh_from_jeju_csv(uploaded, pv_kw=params["pv_capacity_kw"])
+        annual_pv_from_pvlib = hourly_pv.sum()
 
-    st.sidebar.success(f"PVlib 기반 연간 발전량 계산됨: {annual_pv_from_pvlib:,.0f} kWh")
-    params["pv_annual_kwh"] = annual_pv_from_pvlib
+        st.sidebar.success(f"PVlib 기반 연간 발전량 계산됨: {annual_pv_from_pvlib:,.0f} kWh")
+        params["pv_annual_kwh"] = annual_pv_from_pvlib
 
-    install_year = st.sidebar.number_input("설치 연도", value=2025, step=1)
-    current_year = st.sidebar.number_input("마지막 연도", value=2045, step=1, min_value=install_year)
+        install_year = st.sidebar.number_input("설치 연도", value=2025, step=1)
+        current_year = st.sidebar.number_input("마지막 연도", value=2045, step=1, min_value=install_year)
 
-    params["num_v2g_chargers"] = st.sidebar.number_input("V2G 충전기 대수", value=params["num_v2g_chargers"], step=1, min_value=1)
-    params["v2g_daily_discharge_per_charger_kwh"] = st.sidebar.number_input(
-        "1대당 일일 방전량 (kWh)", value=params["v2g_daily_discharge_per_charger_kwh"], step=1, min_value=1
-    )
-    params["v2g_operating_days"] = st.sidebar.number_input(
-        "연간 운영일 수", value=params["v2g_operating_days"], step=10, min_value=1, max_value=365
-    )
-    params["pv_annual_kwh"] = st.sidebar.number_input("연간 PV 발전량 (kWh)", value=params["pv_annual_kwh"], step=1000, min_value=0)
-    params["self_use_ratio"] = st.sidebar.slider("PV 자가소비 비율", min_value=0.0, max_value=1.0, value=params["self_use_ratio"], step=0.05)
-    params["pv_base_price"] = st.sidebar.number_input("PV 기준단가 (원/kWh)", value=params["pv_base_price"], step=5, min_value=0)
-    params["price_cagr"] = st.sidebar.number_input("전력단가 연평균 상승률", value=params["price_cagr"], step=0.001, format="%.3f")
+        params["num_v2g_chargers"] = st.sidebar.number_input("V2G 충전기 대수", value=params["num_v2g_chargers"], step=1, min_value=1)
+        params["v2g_daily_discharge_per_charger_kwh"] = st.sidebar.number_input(
+            "1대당 일일 방전량 (kWh)", value=params["v2g_daily_discharge_per_charger_kwh"], step=1, min_value=1
+        )
+        params["v2g_operating_days"] = st.sidebar.number_input(
+            "연간 운영일 수", value=params["v2g_operating_days"], step=10, min_value=1, max_value=365
+        )
+        params["pv_annual_kwh"] = st.sidebar.number_input("연간 PV 발전량 (kWh)", value=params["pv_annual_kwh"], step=1000, min_value=0)
+        params["self_use_ratio"] = st.sidebar.slider("PV 자가소비 비율", min_value=0.0, max_value=1.0, value=params["self_use_ratio"], step=0.05)
+        params["pv_base_price"] = st.sidebar.number_input("PV 기준단가 (원/kWh)", value=params["pv_base_price"], step=5, min_value=0)
+        params["price_cagr"] = st.sidebar.number_input("전력단가 연평균 상승률", value=params["price_cagr"], step=0.001, format="%.3f")
 
     # ★ 재무 지표용 할인율
     discount_rate = st.sidebar.number_input(
