@@ -31,12 +31,12 @@ set_korean_font()
 # =========================
 # 2) 유틸/지표 계산 함수
 # =========================
-def generate_hourly_pv_kwh_from_jeju_csv(csv_path, pv_kw=125):
+def generate_hourly_pv_kwh_from_jeju_csv("https://raw.githubusercontent.com/LEENAYOUNG8/v2g-project/refs/heads/main/jeju.csv", pv_kw=125):
     """
     jeju.csv (일사합 MJ/m2) -> 시간별 PV 발전량(kWh) 생성
     """
     # --- (1) 데이터 로드 ---
-    df = pd.read_csv(https://raw.githubusercontent.com/LEENAYOUNG8/v2g-project/refs/heads/main/jeju.csv)
+    df = pd.read_csv("https://raw.githubusercontent.com/LEENAYOUNG8/v2g-project/refs/heads/main/jeju.csv")
     df["일시"] = pd.to_datetime(df["일시"])
     df["GHI_kWh_m2"] = df["일사합(MJ/m2)"] * 0.27778
 
