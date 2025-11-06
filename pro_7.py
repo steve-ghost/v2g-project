@@ -273,6 +273,7 @@ def main():
     uploaded = st.sidebar.file_uploader("./jeju.csv", type=["csv"])
     if uploaded is None:
         st.warning("./jeju.csv")
+        print('brian')
         return
 
     # 2) PVlib 변환 → 연간 kWh 반영
