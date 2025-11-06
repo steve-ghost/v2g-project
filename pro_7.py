@@ -31,27 +31,48 @@ set_korean_font()
 # =========================
 # 2) 유틸/지표 계산 함수
 # =========================
-def generate_hourly_pv_kwh_from_jeju_csv(csv_path, pv_kw=125):
-    df = pd.read_csv(csv_path)
-    df["일시"] = pd.to_datetime(df["일시"])
-    df["GHI_kWh_m2"] = df["일사합(MJ/m2)"] * 0.27778
+def generate_hourly_pv_kwh_from_jeju_csv(file_obj, pv_kw=125):
+    df = pd.read_csv(file_obj)
 
-    daily_ghi = df.groupby(df["일시"])["GHI_kWh_m2"].sum()
+    # ✅ 1) 컬럼 공백 제거 + BOM 제거
+    df.columns = df.columns.str.strip().str.replace("\ufeff", "", regex=False)
 
-    # (이하 동일 — PVlib 코드)
+    # ✅ 2) 일시 컬럼 자동 탐색
+    possible_time_cols = ["일시", "일시(UTC)", "date", "시간", "timestamp"]
+    time_col = None
+    for col in df.columns:
+        if col in possible_time_cols:
+            time_col = col
+            break
 
+    if time_col is None:
+        raise KeyError(f"CSV에서 일시 컬럼을 찾지 못했습니다. 실제 컬럼: {df.columns.tolist()}")
 
-    # 시간별 분해 (단순 weight → pvlib 입력준비)
-    hourly_index = pd.date_range(start=daily_ghi.index.min(),
-                                 end=daily_ghi.index.max()+pd.Timedelta(days=1),
-                                 freq="1H", closed="left")
+    df[time_col] = pd.to_datetime(df[time_col])
 
-    # 태양위치 계산에 필요한 위치 설정
-    lat, lon = 33.4996, 126.5312  # 제주 시청 기준
-    site = location.Location(lat, lon, tz='Asia/Seoul', altitude=10)
+    # ✅ 3) 일사합(MJ/m2) 컬럼 자동 탐색
+    possible_irr_cols = ["일사합(MJ/m2)", "일사합", "GHI", "Irradiance", "일사"]
+    irr_col = None
+    for col in df.columns:
+        if col in possible_irr_cols:
+            irr_col = col
+            break
 
-    # 시간별 태양 위치
-    solpos = site.get_solarposition(times=hourly_index)
+    if irr_col is None:
+        raise KeyError(f"CSV에서 일사합(irradiance) 컬럼을 찾지 못했습니다. 실제 컬럼: {df.columns.tolist()}")
+
+    # ✅ 4) MJ/m2 → kWh/m2 변환
+    df["irr_kwh_m2"] = df[irr_col] * 0.2777778  # 1 MJ = 0.27778 kWh
+
+    # ✅ 5) 패널 용량 × 효율 가정해서 실제 발전량 계산
+    performance_ratio = 0.75
+    df["pv_kwh"] = df["irr_kwh_m2"] * pv_kw * performance_ratio
+
+    # ✅ 6) 시간순 정렬 & set_index
+    df = df.sort_values(time_col)
+    df = df.set_index(time_col)
+
+    return df["pv_kwh"]
 
     # GHI 일별값을 시간별로 재분배(가중: 일사곡선 기반)
     def distribute_daily_to_hourly(day, ghi_day):
