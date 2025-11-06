@@ -6,6 +6,8 @@ import matplotlib.font_manager as fm
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
+from pvlib import location
+from pvlib import irradiance, atmosphere, pvsystem, temperature
 
 # -----------------------------
 # 상수: kWh당 탄소배출계수 (kg CO2e/kWh)
@@ -29,6 +31,67 @@ set_korean_font()
 # =========================
 # 2) 유틸/지표 계산 함수
 # =========================
+def generate_hourly_pv_kwh_from_jeju_csv(csv_path, pv_kw=125):
+    """
+    jeju.csv (일사합 MJ/m2) -> 시간별 PV 발전량(kWh) 생성
+    """
+    # --- (1) 데이터 로드 ---
+    df = pd.read_csv(csv_path)
+    df["일시"] = pd.to_datetime(df["일시"])
+    df["GHI_kWh_m2"] = df["일사합(MJ/m2)"] * 0.27778
+
+    # 일별 합산
+    daily_ghi = df.groupby(df["일시"])["GHI_kWh_m2"].sum()
+
+    # 시간별 분해 (단순 weight → pvlib 입력준비)
+    hourly_index = pd.date_range(start=daily_ghi.index.min(),
+                                 end=daily_ghi.index.max()+pd.Timedelta(days=1),
+                                 freq="1H", closed="left")
+
+    # 태양위치 계산에 필요한 위치 설정
+    lat, lon = 33.4996, 126.5312  # 제주 시청 기준
+    site = location.Location(lat, lon, tz='Asia/Seoul', altitude=10)
+
+    # 시간별 태양 위치
+    solpos = site.get_solarposition(times=hourly_index)
+
+    # GHI 일별값을 시간별로 재분배(가중: 일사곡선 기반)
+    def distribute_daily_to_hourly(day, ghi_day):
+        mask = (hourly_index.date == day.date())
+        hours = hourly_index[mask]
+        pos = solpos[mask]
+        zen = pos['zenith']
+        # 낮 시간만 양수
+        w = np.clip(np.cos(np.radians(zen)), 0, None)
+        if w.sum() == 0:
+            return pd.Series(np.zeros(len(hours)), index=hours)
+        return pd.Series(ghi_day * (w / w.sum()), index=hours)
+
+    hourly_ghi = pd.concat(
+        [distribute_daily_to_hourly(day, ghi_day) for day, ghi_day in daily_ghi.items()]
+    )
+
+    # PVlib 입력 위한 POA 변환
+    poa = irradiance.get_total_irradiance(
+        surface_tilt=25,
+        surface_azimuth=180,
+        dni=None,
+        ghi=hourly_ghi,
+        dhi=None,
+        solar_zenith=solpos['zenith'].reindex(hourly_ghi.index),
+        solar_azimuth=solpos['azimuth'].reindex(hourly_ghi.index)
+    )["poa_global"]
+
+    # PV 성능 파라미터
+    temp_cell = temperature.sapm_cell(poa, temp_air=25, wind_speed=1)
+    effective_irr = poa
+
+    # 모듈 성능 모델 (단순화)
+    pv_power_w = pv_kw * 1000 * (effective_irr / 1000)  # 1sun = 1000W/m2
+    pv_power_kwh = (pv_power_w / 1000)
+
+    return pv_power_kwh
+
 def price_with_cagr(base_price, base_year, year, cagr):
     """기준연도 대비 연복리(cagr) 상승 단가"""
     return base_price * (1 + cagr) ** (year - base_year)
@@ -189,6 +252,16 @@ def main():
 
     # ----- 사이드바 입력 -----
     st.sidebar.header("시뮬레이션 입력")
+    # ----- PVlib 기반 시간별 발전량 업로드 -----
+uploaded = st.sidebar.file_uploader("제주 일사합 CSV 업로드 (jeju.csv)", type=["csv"])
+
+if uploaded is not None:
+    hourly_pv = generate_hourly_pv_kwh_from_jeju_csv(uploaded, pv_kw=params["pv_capacity_kw"])
+    annual_pv_from_pvlib = hourly_pv.sum()
+
+    st.sidebar.success(f"PVlib 기반 연간 발전량 계산됨: {annual_pv_from_pvlib:,.0f} kWh")
+    params["pv_annual_kwh"] = annual_pv_from_pvlib
+
     install_year = st.sidebar.number_input("설치 연도", value=2025, step=1)
     current_year = st.sidebar.number_input("마지막 연도", value=2045, step=1, min_value=install_year)
 
