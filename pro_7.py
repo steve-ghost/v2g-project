@@ -31,17 +31,15 @@ set_korean_font()
 # =========================
 # 2) 유틸/지표 계산 함수
 # =========================
-def generate_hourly_pv_kwh_from_jeju_csv(".devcontainer/jeju.csv", pv_kw=125):
-    """
-    jeju.csv (일사합 MJ/m2) -> 시간별 PV 발전량(kWh) 생성
-    """
-    # --- (1) 데이터 로드 ---
-    df = pd.read_csv(".devcontainer/jeju.csv")
+def generate_hourly_pv_kwh_from_jeju_csv(csv_path, pv_kw=125):
+    df = pd.read_csv(csv_path)
     df["일시"] = pd.to_datetime(df["일시"])
     df["GHI_kWh_m2"] = df["일사합(MJ/m2)"] * 0.27778
 
-    # 일별 합산
     daily_ghi = df.groupby(df["일시"])["GHI_kWh_m2"].sum()
+
+    # (이하 동일 — PVlib 코드)
+
 
     # 시간별 분해 (단순 weight → pvlib 입력준비)
     hourly_index = pd.date_range(start=daily_ghi.index.min(),
@@ -253,7 +251,10 @@ def main():
     # ----- 사이드바 입력 -----
     st.sidebar.header("시뮬레이션 입력")
     # ----- PVlib 기반 시간별 발전량 업로드 -----
-uploaded = st.sidebar.file_uploader("제주 일사합 CSV 업로드 (jeju.csv)", type=["csv"])
+    csv_path = ".devcontainer/jeju.csv"  # 또는 GitHub RAW URL
+    hourly_pv = generate_hourly_pv_kwh_from_jeju_csv(csv_path, pv_kw=params["pv_capacity_kw"])
+    params["pv_annual_kwh"] = hourly_pv.sum()
+
 
 if uploaded is not None:
     hourly_pv = generate_hourly_pv_kwh_from_jeju_csv(uploaded, pv_kw=params["pv_capacity_kw"])
