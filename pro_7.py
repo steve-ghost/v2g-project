@@ -270,9 +270,9 @@ def main():
     params = make_v2g_model_params()
 
     # 1) 업로드 필수
-    uploaded = st.sidebar.file_uploader("jeju.csv 업로드", type=["csv"])
+    uploaded = st.sidebar.file_uploader("./jeju.csv", type=["csv"])
     if uploaded is None:
-        st.warning("jeju.csv 파일을 업로드해주세요.")
+        st.warning("./jeju.csv")
         return
 
     # 2) PVlib 변환 → 연간 kWh 반영
