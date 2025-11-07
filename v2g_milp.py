@@ -76,7 +76,7 @@ def pv_from_ghi_hourly(ghi_h_kWhm2, pv_kw=125.0, pr=0.8, tf=1.10, alpha=0.22):
     return pd.Series(pv_kWh.values, index=ghi_h_kWhm2.index, name="PV_kWh")
 
 def load_pv_from_jeju(jeju_csv, lat_deg=33.5, pv_kw=125.0, pr=0.8, tf=1.10, alpha=0.22):
-    df = read_csv_smart(jeju_csv)
+    df = read_csv_smart(./jeju.csv)
     col_ghi = None
     for cand in ["일사합(MJ/m2)","일사합(MJ/m²)","일사합","MJ_m2","GHI_MJ_m2"]:
         if cand in df.columns:
@@ -91,7 +91,7 @@ def load_pv_from_jeju(jeju_csv, lat_deg=33.5, pv_kw=125.0, pr=0.8, tf=1.10, alph
     return pv_hourly
 
 def load_smp(smp_csv):
-    df = read_csv_smart(smp_csv)
+    df = read_csv_smart(./SMP.csv)
     try_cols = ["일시","거래시간","시간","TIMESTAMP","datetime","Date","날짜"]
     df = ensure_datetime_index(df, try_cols)
     price_col = None
