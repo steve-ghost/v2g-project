@@ -243,10 +243,9 @@ def main():
     # --- 사이드바: 데이터 & 시스템 설정 ---
     st.sidebar.header("입력 데이터/시스템 설정")
 
-    # ① CSV 경로
+    # ① CSV 경로 (사이드바 없이 내부에서 고정)
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    default_csv = os.path.join(base_dir, "jeju.csv")
-    csv_path = st.sidebar.text_input("일사합 CSV 경로", value=default_csv)
+    csv_path = os.path.join(base_dir, "jeju.csv")  # 레포에 올라간 파일명 그대로
 
     # ② 모듈/면적/PR
     c1, c2 = st.sidebar.columns(2)
