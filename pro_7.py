@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -14,6 +11,7 @@ import numpy as np
 # 상수: kWh당 탄소배출계수 (kg CO2e/kWh)
 # -----------------------------
 EMISSION_FACTOR_KG_PER_KWH = 0.495  # 국내 전력 1kWh 생산시 약 0.495 kgCO2e
+MJ_PER_M2_TO_KWH_PER_M2 = 0.27778   # MJ/m² → kWh/m² 변환 계수
 
 # =========================
 # 1) 한글 폰트 (NanumGothic.ttf 를 앱 폴더에 넣어두면 자동 사용)
@@ -29,7 +27,7 @@ def set_korean_font():
 set_korean_font()
 
 # =========================
-# 2) 유틸/지표 계산 함수
+# 2) 재무 유틸
 # =========================
 def price_with_cagr(base_price, base_year, year, cagr):
     return base_price * (1 + cagr) ** (year - base_year)
@@ -62,7 +60,8 @@ def irr_bisection(cashflows: list[float], lo=-0.99, hi=3.0, tol=1e-7, max_iter=2
     return mid
 
 def discounted_payback(cashflows: list[float], rate: float):
-    disc, cum = [], 0.0
+    disc = []
+    cum = 0.0
     for t, cf in enumerate(cashflows):
         val = cf / ((1 + rate) ** t)
         cum += val
@@ -80,132 +79,167 @@ def won_formatter(x, pos):
     return f"{int(x):,}"
 
 # =========================
-# 3) 면적/모듈수/PR — 유지 (경로는 없음)
+# 3) CSV → 연도별 PV kWh 계산
 # =========================
-PANEL_W, PANEL_H, N_MODULES = 1.46, 0.98, 250
-AREA_M2 = PANEL_W * PANEL_H * N_MODULES   # 357.7 m²
-# 예시 PR: 0.82(기본손실) * 0.98(가동률) * (1-0.02)(오염) * 0.97(인버터) ≈ 0.76
-PR_EFFECTIVE = 0.76
+def load_irradiance_csv(csv_path: str) -> pd.DataFrame:
+    """
+    jeju.csv 같은 연도별 '일사합(MJ/m²)' 파일을 읽어:
+    - 연도 컬럼: ['연도', 'year', '일시'] 중 하나 탐색 (숫자로 파싱)
+    - 일사합 컬럼: ['일사합(MJ/m2)', '일사합(MJ/m²)', 'GHI_MJ', 'ghi_mj'] 중 탐색
+    반환: 컬럼 ['year', 'ghi_mj_m2']
+    """
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"CSV가 없음: {csv_path}")
+
+    # 인코딩은 utf-8-sig 우선, 실패 시 cp949 시도
+    tried = []
+    for enc in ["utf-8-sig", "cp949"]:
+        try:
+            df = pd.read_csv(csv_path, encoding=enc)
+            break
+        except Exception as e:
+            tried.append((enc, str(e)))
+            df = None
+    if df is None:
+        raise ValueError(f"CSV 읽기 실패: {tried}")
+
+    # 컬럼 소문자/공백 제거
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # 연도 후보
+    year_candidates = ["연도", "year", "일시"]
+    year_col = None
+    for c in year_candidates:
+        if c in df.columns:
+            year_col = c
+            break
+    if year_col is None:
+        raise ValueError(f"[연도 컬럼 없음] 실제 열: {list(df.columns)}")
+
+    # 일사합 후보
+    ghi_candidates = [
+        "일사합(mj/m2)", "일사합(mj/m²)", "ghi_mj", "ghi(mj/m2)", "ghi(mj/m²)",
+        "solar_mj", "solar(mj/m2)"
+    ]
+    ghi_col = None
+    for c in ghi_candidates:
+        if c in df.columns:
+            ghi_col = c
+            break
+    if ghi_col is None:
+        # 혹시 제목이 조금 다르면 'mj'와 'm2' 포함된 열을 찾아본다
+        maybe = [c for c in df.columns if ("mj" in c and "m" in c)]
+        raise ValueError(f"[일사합 컬럼 없음] 실제 열: {list(df.columns)} / 후보 미일치. 유사: {maybe}")
+
+    # 정리
+    out = pd.DataFrame({
+        "year": pd.to_numeric(df[year_col], errors="coerce"),
+        "ghi_mj_m2": pd.to_numeric(df[ghi_col], errors="coerce")
+    }).dropna()
+
+    out["year"] = out["year"].astype(int)
+    return out.sort_values("year").reset_index(drop=True)
+
+def compute_pv_kwh_by_year(irr_df: pd.DataFrame,
+                           panel_width_m=1.46,
+                           panel_height_m=0.98,
+                           n_modules=250,
+                           pr_base=0.82, availability=0.98, soiling=0.02, inv_eff=0.97,
+                           pr_manual=None):
+    """
+    연도별 일사합(MJ/m²) → kWh/m² 변환 후
+    PV 연간 발전량(kWh) = GHI_kWh/m² × 총면적(m²) × PR
+    pr_manual이 주어지면 그 값 사용, 없으면 고정 손실 계수로 PR 계산.
+    반환: dict {year: pv_kwh}
+    """
+    area_m2 = float(panel_width_m) * float(panel_height_m) * int(n_modules)
+    if pr_manual is None:
+        PR = pr_base * availability * (1.0 - soiling) * inv_eff  # 예: 약 0.76~0.80
+    else:
+        PR = float(pr_manual)
+
+    # 일사합(MJ/m²) → kWh/m²
+    ghi_kwh_m2 = irr_df["ghi_mj_m2"].astype(float) * MJ_PER_M2_TO_KWH_PER_M2
+    pv_kwh = ghi_kwh_m2 * area_m2 * PR
+
+    out = dict(zip(irr_df["year"].astype(int).tolist(), pv_kwh.astype(float).tolist()))
+    return out, area_m2, PR
 
 # =========================
-# 4) 업로더에서 받은 CSV -> 연도별 PV(kWh) 계산
-# =========================
-def detect_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    norm = {c.replace(" ", "").lower(): c for c in df.columns}
-    for k in candidates:
-        if k in norm:
-            return norm[k]
-    return None
-
-def pv_kwh_by_year_from_uploaded_csv(file) -> dict | None:
-    if file is None:
-        return None
-    # 인코딩 추정 없이 바로 read_csv(file) (Streamlit 업로더는 바이너리 핸들 제공)
-    try:
-        df = pd.read_csv(file)
-    except UnicodeDecodeError:
-        file.seek(0)
-        df = pd.read_csv(file, encoding="cp949")
-    except Exception:
-        return None
-
-    year_col = detect_col(df, ["연도", "year", "일시", "date"])
-    ghi_col  = detect_col(df, ["일사합(mj/m2)", "일사합(mj/m²)", "일사합", "ghimj", "ghi_mj", "ghi(mj/m2)"])
-    if year_col is None or ghi_col is None:
-        st.warning("⚠️ CSV에서 연도/일사합 컬럼을 찾지 못했습니다. 업로드 무시하고 기본값으로 진행합니다.")
-        return None
-
-    # 연도 파싱
-    try:
-        year_series = pd.to_numeric(df[year_col], errors="coerce")
-        if year_series.notna().mean() < 0.5:
-            year_series = pd.to_datetime(df[year_col], errors="coerce").dt.year
-    except Exception:
-        year_series = pd.to_datetime(df[year_col], errors="coerce").dt.year
-
-    df["_year_"] = year_series
-    df = df.dropna(subset=["_year_"]).copy()
-    df["_year_"] = df["_year_"].astype(int)
-
-    df["_ghi_mj_"] = pd.to_numeric(df[ghi_col], errors="coerce")
-    # 연도별 합계(연단위 파일이면 그대로 1행일 뿐)
-    yearly_mj_per_m2 = df.groupby("_year_", as_index=True)["_ghi_mj_"].sum()
-    yearly_kwh_per_m2 = yearly_mj_per_m2 * 0.27778  # MJ/m² -> kWh/m²
-    # 면적 & PR 반영
-    yearly_pv_kwh = (yearly_kwh_per_m2 * AREA_M2 * PR_EFFECTIVE).to_dict()
-    return yearly_pv_kwh
-
-# =========================
-# 5) 기본 파라미터
+# 4) 기본 파라미터 (V2G/단가/O&M 등)
 # =========================
 def make_v2g_model_params():
     return {
-        # PV (업로드 없으면 이 값 사용)
-        "pv_capacity_kw": 125,
-        "pv_annual_kwh": 153_300,     # 업로드 없을 때 fallback
-        "self_use_ratio": 0.60,
+        # PV 쪽은 CSV로 계산하므로 pv_annual_kwh는 쓰지 않음
+        "self_use_ratio": 0.60,           # 자가소비 비율
 
         # V2G
-        "num_v2g_chargers": 6,
-        "v2g_charger_unit_cost": 25_000_000,
+        "num_v2g_chargers": 6,            # 대수
+        "v2g_charger_unit_cost": 25_000_000,  # 대당 CAPEX
         "v2g_daily_discharge_per_charger_kwh": 35,
         "degradation_factor": 0.9,
-        "v2g_operating_days": 300,
+        "v2g_operating_days": 300,        # 연 가동일
 
         # 단가(연복리 상승)
         "tariff_base_year": 2025,
-        "pv_base_price": 160,
-        "v2g_price_gap": 30,
-        "price_cagr": 0.043,
+        "pv_base_price": 160,             # 원/kWh
+        "v2g_price_gap": 30,              # PV 대비 V2G 프리미엄
+        "price_cagr": 0.043,              # 전력단가 상승률
 
         # O&M
-        "om_ratio": 0.015,
+        "om_ratio": 0.015,                # CAPEX 대비 연간 O&M 비율
     }
 
 # =========================
-# 6) 현금흐름 빌드 (연도별 PV 반영)
+# 5) 현금흐름 빌드 (CSV 기반 PV연간 kWh 사용)
 # =========================
-def build_yearly_cashflows(install_year: int, current_year: int, p: dict,
-                           pv_kwh_by_year: dict | None = None):
-    years = list(range(install_year, current_year + 1))
-
-    # V2G(연간 고정)
+def build_yearly_cashflows_from_csv(install_year: int, current_year: int, p: dict,
+                                    pv_kwh_by_year: dict):
+    """
+    pv_kwh_by_year: {year: kWh}  형태 (CSV에서 계산된 PV 연간 발전량)
+    기간 내 연도별 값이 없으면 가장 가까운 연도 값으로 대체(클램핑)한다.
+    """
+    # V2G: 연간 방전량 (고정)
     daily_v2g_kwh = p["num_v2g_chargers"] * p["v2g_daily_discharge_per_charger_kwh"]
     annual_v2g_kwh = daily_v2g_kwh * p["v2g_operating_days"] * p["degradation_factor"]
 
+    # CAPEX/O&M
     capex_total = p["num_v2g_chargers"] * p["v2g_charger_unit_cost"]
     annual_om_cost = capex_total * p["om_ratio"]
 
+    # PV 자가소비 반영
+    self_use = float(p["self_use_ratio"])
+
+    years = list(range(install_year, current_year + 1))
     yearly_cash, cumulative = [], []
     pv_revenues, v2g_revenues, om_costs, capex_list = [], [], [], []
-    pv_kwh_year_list, pv_surplus_kwh_year_list = [], []
 
-    default_pv_kwh = p["pv_annual_kwh"]
-    dict_mean = None
-    if pv_kwh_by_year:
-        dict_mean = float(np.mean(list(pv_kwh_by_year.values())))
+    # PV 가용 연도 경계
+    if len(pv_kwh_by_year) == 0:
+        raise ValueError("CSV에서 계산된 PV 연간 발전량이 없습니다.")
+    min_y, max_y = min(pv_kwh_by_year.keys()), max(pv_kwh_by_year.keys())
 
     cum = 0.0
     for i, year in enumerate(years):
-        if pv_kwh_by_year and year in pv_kwh_by_year:
-            pv_kwh = float(pv_kwh_by_year[year])
-        elif pv_kwh_by_year and dict_mean is not None:
-            pv_kwh = dict_mean
-        else:
-            pv_kwh = float(default_pv_kwh)
+        # PV kWh: 기간 밖이면 경계값 사용(보수적)
+        y_key = min(max(year, min_y), max_y)
+        annual_pv_kwh = pv_kwh_by_year[y_key]
+        annual_pv_surplus_kwh = annual_pv_kwh * (1 - self_use)
 
-        pv_surplus_kwh = pv_kwh * (1 - p["self_use_ratio"])
-
+        # 단가
         pv_price_y = price_with_cagr(p["pv_base_price"], p["tariff_base_year"], year, p["price_cagr"])
         v2g_price_y = pv_price_y + p["v2g_price_gap"]
 
-        revenue_pv_y = pv_surplus_kwh * pv_price_y
+        # 수입
+        revenue_pv_y = annual_pv_surplus_kwh * pv_price_y
         revenue_v2g_y = annual_v2g_kwh * v2g_price_y
         annual_revenue_y = revenue_pv_y + revenue_v2g_y
 
+        # 비용
         om_y = annual_om_cost
         capex_y = capex_total if i == 0 else 0
 
+        # 순현금
         cf = annual_revenue_y - om_y - capex_y
         cum += cf
 
@@ -215,9 +249,11 @@ def build_yearly_cashflows(install_year: int, current_year: int, p: dict,
         v2g_revenues.append(revenue_v2g_y)
         om_costs.append(om_y)
         capex_list.append(capex_y)
-        pv_kwh_year_list.append(pv_kwh)
-        pv_surplus_kwh_year_list.append(pv_surplus_kwh)
 
+    # 탄소절감 kWh 계산을 위해 평균치 사용(간단화)
+    avg_pv_surplus_kwh = np.mean([
+        pv_kwh_by_year[min(max(y, min_y), max_y)] * (1 - self_use) for y in years
+    ])
     return {
         "years": years,
         "yearly_cash": yearly_cash,
@@ -226,117 +262,133 @@ def build_yearly_cashflows(install_year: int, current_year: int, p: dict,
         "v2g_revenues": v2g_revenues,
         "om_costs": om_costs,
         "capex_list": capex_list,
-        "pv_kwh_year": pv_kwh_year_list,
-        "pv_surplus_kwh_year": pv_surplus_kwh_year_list,
+        "annual_pv_surplus_kwh": avg_pv_surplus_kwh,  # 평균치(보고용)
         "annual_v2g_kwh": annual_v2g_kwh,
     }
 
 # =========================
-# 7) Streamlit App
+# 6) Streamlit App
 # =========================
 def main():
-    st.title("V2G 투자 대비 연도별/누적 현금흐름 (경로 숨김 / 면적·모듈수 유지)")
+    st.title("V2G + PV 경제성 (CSV 일사합 기반 PV 자동계산)")
 
-    params = make_v2g_model_params()
+    # --- 사이드바: 파일 경로 & 시스템 파라미터 ---
+    st.sidebar.header("입력 데이터/시스템 설정")
 
-    # ------ 사이드바 (CSV 경로 항목 없음) ------
-    st.sidebar.header("시뮬레이션 입력")
+    # ① CSV 경로
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    default_csv = os.path.join(base_dir, "jeju.csv")  # 레포에 넣어두면 자동 인식
+    csv_path = st.sidebar.text_input("일사합 CSV 경로", value=default_csv)
+
+    # ② 모듈/면적/PR (필요 최소만 노출; 사용자가 바꾸고 싶을 수도 있으니 사이드바에 둠)
+    c1, c2 = st.sidebar.columns(2)
+    panel_w = c1.number_input("패널 폭(m)", value=1.46, step=0.01, format="%.2f")
+    panel_h = c2.number_input("패널 높이(m)", value=0.98, step=0.01, format="%.2f")
+    n_modules = st.sidebar.number_input("모듈 수(장)", value=250, step=5, min_value=1)
+
+    st.sidebar.caption("PR은 고정 계수(기본) 또는 직접 지정(수동) 중 선택")
+    use_manual_pr = st.sidebar.checkbox("PR 수동 지정", value=False)
+    if use_manual_pr:
+        pr_manual = st.sidebar.number_input("PR (0~1)", value=0.78, min_value=0.0, max_value=1.0, step=0.01)
+    else:
+        pr_manual = None
+    # 고정 계수(기본) – 논문/현장값에 맞게 수정 가능
+    pr_base = 0.82
+    availability = 0.98
+    soiling = 0.02
+    inv_eff = 0.97
+
+    # ③ 시뮬레이션 기간/요금/비율
     install_year = st.sidebar.number_input("설치 연도", value=2025, step=1)
     current_year = st.sidebar.number_input("마지막 연도", value=2045, step=1, min_value=install_year)
 
-    params["num_v2g_chargers"] = st.sidebar.number_input("V2G 충전기 대수", value=params["num_v2g_chargers"], step=1, min_value=1)
-    params["v2g_daily_discharge_per_charger_kwh"] = st.sidebar.number_input(
-        "1대당 일일 방전량 (kWh)", value=params["v2g_daily_discharge_per_charger_kwh"], step=1, min_value=1
-    )
-    params["v2g_operating_days"] = st.sidebar.number_input(
-        "연간 운영일 수", value=params["v2g_operating_days"], step=10, min_value=1, max_value=365
-    )
-    # pv_annual_kwh 입력 칸 제거 (업로드가 있으면 자동 반영)
+    params = make_v2g_model_params()
     params["self_use_ratio"] = st.sidebar.slider("PV 자가소비 비율", 0.0, 1.0, params["self_use_ratio"], 0.05)
     params["pv_base_price"] = st.sidebar.number_input("PV 기준단가 (원/kWh)", value=params["pv_base_price"], step=5, min_value=0)
     params["price_cagr"] = st.sidebar.number_input("전력단가 연평균 상승률", value=params["price_cagr"], step=0.001, format="%.3f")
 
-    discount_rate = st.sidebar.number_input("할인율(연)", value=0.08, min_value=0.0, max_value=0.5,
-                                            step=0.005, format="%.3f", help="NPV/할인회수기간 계산에 사용")
+    # 재무 지표용 할인율
+    discount_rate = st.sidebar.number_input("할인율(연)", value=0.08, min_value=0.0, max_value=0.5, step=0.005, format="%.3f")
 
-    # ------ 파일 업로드 (경로가 아니라 업로드만) ------
-    with st.sidebar.expander("옵션: 일사합 CSV 업로드", expanded=False):
-        st.caption("연/월 일사합(MJ/m²) 포함 CSV를 올리면 PV 연간 발전량을 자동 계산합니다.")
-        uploaded = st.file_uploader("CSV 업로드", type=["csv"])
+    # --- CSV 로드 & PV 연간 kWh 계산 ---
+    irr_df = load_irradiance_csv(csv_path)
+    pv_by_year, area_m2, PR_used = compute_pv_kwh_by_year(
+        irr_df,
+        panel_width_m=panel_w, panel_height_m=panel_h, n_modules=int(n_modules),
+        pr_base=pr_base, availability=availability, soiling=soiling, inv_eff=inv_eff,
+        pr_manual=pr_manual
+    )
 
-    pv_kwh_by_year = pv_kwh_by_year_from_uploaded_csv(uploaded)
-
-    # ------ 계산 ------
-    cf = build_yearly_cashflows(install_year, current_year, params, pv_kwh_by_year=pv_kwh_by_year)
-    years = cf["years"]
-    yearly_cash = cf["yearly_cash"]
-    cumulative = cf["cumulative"]
+    # --- 현금흐름 계산 (CSV 기반) ---
+    cf = build_yearly_cashflows_from_csv(install_year, current_year, params, pv_by_year)
+    years = cf["years"]; yearly_cash = cf["yearly_cash"]; cumulative = cf["cumulative"]
 
     # 손익분기 연도
-    break_even_year = None
-    for y, c in zip(years, cumulative):
-        if c >= 0:
-            break_even_year = y
-            break
+    break_even_year = next((y for y, cum in zip(years, cumulative) if cum >= 0), None)
 
-    # 탄소절감량
-    total_clean_kwh = float(np.sum(cf["pv_surplus_kwh_year"])) + len(years) * cf["annual_v2g_kwh"]
+    # 탄소절감량(kgCO2e) – 평균 연간 kWh로 추정
+    clean_kwh_per_year = cf["annual_pv_surplus_kwh"] + cf["annual_v2g_kwh"]
+    total_clean_kwh = clean_kwh_per_year * len(years)
     total_co2_kg = total_clean_kwh * EMISSION_FACTOR_KG_PER_KWH
 
-    # 재무 지표
+    # 재무지표
     npv_val = npv(discount_rate, yearly_cash)
     irr_val = irr_bisection(yearly_cash)
     dpp_val = discounted_payback(yearly_cash, discount_rate)
 
-    # KPI 1행: 재무
+    # --- KPI (1행: 재무) ---
     k1, k2, k3, sp1 = st.columns([1, 1, 1, 0.4])
     with k1:
         st.markdown('<div style="font-size:0.85rem;color:#666;">NPV</div>', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:1.3rem;font-weight:600;">{npv_val:,.0f} 원</div>', unsafe_allow_html=True)
         st.caption(f"할인율 {discount_rate*100:.1f}%")
+
     with k2:
         st.markdown('<div style="font-size:0.85rem;color:#666;">IRR</div>', unsafe_allow_html=True)
         irr_txt = f"{irr_val*100:.2f} %" if irr_val is not None else "정의 불가"
         st.markdown(f'<div style="font-size:1.3rem;font-weight:600;">{irr_txt}</div>', unsafe_allow_html=True)
+
     with k3:
         st.markdown('<div style="font-size:0.85rem;color:#666;">할인 회수기간</div>', unsafe_allow_html=True)
         dpp_txt = f"{dpp_val:.2f} 년" if dpp_val is not None else "미회수"
         st.markdown(f'<div style="font-size:1.3rem;font-weight:600;">{dpp_txt}</div>', unsafe_allow_html=True)
 
-    # KPI 2행: 기존지표
+    # --- KPI (2행: 시스템/환경) ---
     r1, r2, r3, sp2 = st.columns([1, 1, 1, 0.4])
     with r1:
         be_text = f"{break_even_year}년" if break_even_year else "아직 미도달"
         st.markdown('<div style="font-size:0.85rem;color:#666;">손익분기 연도</div>', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:1.3rem;font-weight:600;">{be_text}</div>', unsafe_allow_html=True)
+
     with r2:
         st.markdown('<div style="font-size:0.85rem;color:#666;">마지막 연도 누적</div>', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:1.3rem;font-weight:600;">{cumulative[-1]:,.0f} 원</div>', unsafe_allow_html=True)
+
     with r3:
         st.markdown('<div style="font-size:0.85rem;color:#666;">누적 탄소절감량</div>', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:1.3rem;font-weight:600;">{total_co2_kg:,.0f} kgCO₂e</div>', unsafe_allow_html=True)
 
-    # 누적 라인
+    # --- 그래프: 누적 라인 ---
     st.subheader("누적 현금흐름")
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(years, cumulative, marker="o", linewidth=2.2)
     ax.set_xlabel("연도"); ax.set_ylabel("누적 금액(원)")
     ax.yaxis.set_major_formatter(FuncFormatter(won_formatter))
     ax.grid(True, linestyle="--", alpha=0.4)
-    ax.set_title("V2G + PV 누적 현금흐름")
+    ax.set_title("V2G + PV 누적 현금흐름 (CSV 기반 PV)")
     if break_even_year is not None:
         ax.axvline(break_even_year, color="green", linestyle="--", alpha=0.7)
         ax.text(break_even_year, 0, f"손익분기 {break_even_year}", color="green", va="bottom", ha="left")
     st.pyplot(fig)
 
-    # 누적 막대
+    # --- 그래프: 연도별 누적 막대 ---
     st.subheader("연도별 순현금흐름 (누적)")
     x_labels = [f"{y}년" for y in years]
-    colors = ["red" if c < 0 else "royalblue" for c in cumulative]
-    bar_fig = go.Figure(
-        data=[go.Bar(x=x_labels, y=cumulative, marker=dict(color=colors),
-                     text=[f"{v:,.0f}원" for v in cumulative], textposition="outside")]
-    )
+    colors = ["red" if cum < 0 else "royalblue" for cum in cumulative]
+    bar_fig = go.Figure(data=[go.Bar(x=x_labels, y=cumulative,
+                                     marker=dict(color=colors),
+                                     text=[f"{v:,.0f}원" for v in cumulative],
+                                     textposition="outside")])
     if break_even_year is not None:
         be_label = f"{break_even_year}년"
         bar_fig.add_shape(type="line", x0=be_label, x1=be_label, y0=0, y1=1,
@@ -347,7 +399,7 @@ def main():
     bar_fig.update_layout(title="연도별 순현금흐름 (누적)", yaxis=dict(tickformat=","), bargap=0.25)
     st.plotly_chart(bar_fig, use_container_width=True)
 
-    # 표
+    # --- 표: 연도별 금액 ---
     st.subheader("연도별 금액 확인")
     df_table = pd.DataFrame({
         "연도": years,
@@ -359,6 +411,10 @@ def main():
         "CAPEX(원)": cf["capex_list"],
     })
     st.dataframe(df_table, use_container_width=True)
+
+    # 참고 정보 표시
+    st.caption(f"총 모듈 면적: {area_m2:.1f} m² | 사용 PR: {PR_used:.3f} "
+               f"| CSV 연도 범위: {min(pv_by_year.keys())}~{max(pv_by_year.keys())}")
 
 if __name__ == "__main__":
     main()
