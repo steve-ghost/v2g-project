@@ -238,7 +238,7 @@ def build_yearly_cashflows_from_csv(install_year: int, current_year: int, p: dic
 # 6) Streamlit App
 # =========================
 def main():
-    st.title("V2G + PV 경제성 (CSV 일사합 기반 PV 자동계산)")
+    st.title("V2G 투자 대비 연도별/누적 현금흐름")
 
     # --- 사이드바: 데이터 & 시스템 설정 ---
     st.sidebar.header("입력 데이터/시스템 설정")
