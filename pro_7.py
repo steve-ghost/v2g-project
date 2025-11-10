@@ -149,46 +149,57 @@ def compute_pv_kwh_by_year(irr_df: pd.DataFrame,
 # =========================
 def load_smp_series(csv_path: str) -> pd.Series:
     """
-    SMP.csv를 읽어 시간대별 단가 시리즈(원/kWh) 생성.
-    - 날짜/시간 컬럼 자동 탐지
-    - 1시간 격자로 리샘플 + 보간
-    - Asia/Seoul 로컬라이즈
+    SMP.csv (기간, 01시~24시, 최대, 최소, 가중평균 형식)를 읽어
+    시간별 SMP 시리즈(원/kWh)로 변환.
     """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"SMP CSV가 없음: {csv_path}")
+
+    # 인코딩 탐색
     for enc in ["utf-8-sig", "cp949"]:
         try:
             df = pd.read_csv(csv_path, encoding=enc)
             break
-        except:
+        except Exception:
             df = None
     if df is None:
         raise RuntimeError("SMP CSV 읽기 실패")
 
-    cols = {c.strip(): c for c in df.columns}
-    # 날짜/일시
-    date_col = next((cols[c] for c in cols if c.lower() in ["일시","date","날짜","datetime","timestamp"]), None)
+    # 열 이름 정리
+    df.columns = [str(c).strip() for c in df.columns]
+    date_col = next((c for c in df.columns if "기간" in c or "date" in c.lower()), None)
     if date_col is None:
-        date_only = next((cols[c] for c in cols if c.lower() in ["일자","date","날짜"]), None)
-        time_only = next((cols[c] for c in cols if c.lower() in ["시간","hour","time"]), None)
-        if date_only and time_only:
-            dt = pd.to_datetime(df[date_only].astype(str) + " " + df[time_only].astype(str), errors="coerce")
-        else:
-            raise ValueError("SMP 날짜/시간 컬럼을 찾지 못함")
-    else:
-        dt = pd.to_datetime(df[date_col], errors="coerce")
+        raise ValueError("‘기간’ 또는 날짜 열을 찾을 수 없습니다.")
 
-    price_col = next((cols[c] for c in cols if "smp" in c.lower() or "가격" in c or "단가" in c), None)
-    if price_col is None:
-        raise ValueError("SMP/가격 컬럼을 찾지 못함")
+    # melt로 wide → long 변환
+    hour_cols = [c for c in df.columns if any(str(i).zfill(2) in c for i in range(1,25))]
+    df_long = df.melt(id_vars=[date_col], value_vars=hour_cols,
+                      var_name="hour", value_name="price")
 
-    df = df.assign(dt=dt, price=pd.to_numeric(df[price_col], errors="coerce")).dropna(subset=["dt","price"])
-    s = df.set_index("dt")["price"].sort_index()
-    s = s.groupby(level=0).mean()
+    # 날짜 + 시각 결합
+    def parse_datetime(row):
+        h = str(row["hour"]).replace("시", "").strip()
+        try:
+            h_int = int(h)
+        except:
+            return pd.NaT
+        return pd.to_datetime(f"{row[date_col]} {h_int:02d}:00", errors="coerce")
+
+    df_long["dt"] = df_long.apply(parse_datetime, axis=1)
+    df_long["price"] = pd.to_numeric(df_long["price"], errors="coerce")
+
+    df_long = df_long.dropna(subset=["dt", "price"])
+    df_long = df_long.sort_values("dt")
+
+    s = df_long.set_index("dt")["price"]
+
+    # 리샘플링/보간/타임존
     s = s.resample("1H").mean().interpolate("time").ffill().bfill()
     if s.index.tz is None:
         s.index = s.index.tz_localize("Asia/Seoul", nonexistent="shift_forward", ambiguous="NaT")
-    return s # Series[dt -> 원/kWh]
+
+    return s  # Series(dt → SMP[원/kWh])
+
 
 def escalate_series_by_cagr(base_series: pd.Series, base_year: int, year: int, cagr: float) -> pd.Series:
     """대표연도 시계열을 해당 연도로 스케일(가격 × (1+CAGR)^(Δt))"""
