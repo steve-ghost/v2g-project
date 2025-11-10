@@ -363,6 +363,10 @@ def build_yearly_cashflows_from_csv(install_year: int, current_year: int, p: dic
         # V2G 시간 분해
         if smp_base_series is not None and smp_base_year is not None:
             smp_y = escalate_series_by_cagr(smp_base_series, smp_base_year, year, p["price_cagr"])
+            def escalate_series_by_cagr(base_series: pd.Series, base_year: int, year: int, cagr: float) -> pd.Series:
+                factor = (1.0 + cagr) ** (year - base_year)
+                return base_series * factor
+
             v2g_hourly = build_v2g_hourly_series(
                 year,
                 p["num_v2g_chargers"],
