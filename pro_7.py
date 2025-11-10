@@ -501,7 +501,7 @@ def main():
             use_smp = False
 
     # ── 현금흐름 계산 ──
-    os.write(1, f"현금흐름계산")
+    os.write(1, b"현금흐름계산")
     cf = build_yearly_cashflows_from_csv(
         install_year, current_year, params, pv_by_year,
         smp_base_series=smp_series if use_smp else None,
