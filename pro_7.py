@@ -493,7 +493,7 @@ def main():
     smp_series = None
     if use_smp:
         try:
-            os.write(1, f' Loading SMP form:{smp_csv_path}') 
+            print( f' Loading SMP form:{smp_csv_path}') 
             smp_series = load_smp_series(smp_csv_path)
         except Exception as e:
             st.warning(f"SMP 읽기 실패: {e}\n→ SMP 미사용 방식으로 대체 계산합니다.")
