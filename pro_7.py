@@ -9,18 +9,15 @@ import matplotlib.font_manager as fm
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import pytz
 
 # -----------------------------
 # 상수
 # -----------------------------
 EMISSION_FACTOR_KG_PER_KWH = 0.495   # 국내 전력 1kWh 생산시 약 0.495 kgCO2e
-MJ_PER_M2_TO_KWH_PER_M2 = 0.27778    # MJ/m² → kWh/m² 변환 계수
-KST = pytz.timezone("Asia/Seoul")
+MJ_PER_M2_TO_KWH_PER_M2     = 0.27778 # MJ/m² → kWh/m²
 
 # =========================
-# 1) 한글 폰트 (NanumGothic.ttf 를 앱 폴더에 넣어두면 자동 사용)
+# 1) 한글 폰트
 # =========================
 def set_korean_font():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,7 +33,6 @@ set_korean_font()
 # 2) 재무 유틸
 # =========================
 def price_with_cagr(base_price, base_year, year, cagr):
-    """기준연도 대비 연복리(cagr) 적용 단가"""
     return base_price * (1 + cagr) ** (year - base_year)
 
 def npv(rate: float, cashflows: list[float]) -> float:
@@ -46,20 +42,16 @@ def npv(rate: float, cashflows: list[float]) -> float:
 
 def irr_bisection(cashflows: list[float], lo=-0.99, hi=3.0, tol=1e-7, max_iter=200):
     def f(r):
-        try:
-            return npv(r, cashflows)
-        except Exception:
-            return np.nan
+        try: return npv(r, cashflows)
+        except: return np.nan
     f_lo, f_hi = f(lo), f(hi)
     if np.isnan(f_lo) or np.isnan(f_hi) or f_lo * f_hi > 0:
         return None
     for _ in range(max_iter):
         mid = (lo + hi) / 2
         f_mid = f(mid)
-        if np.isnan(f_mid):
-            return None
-        if abs(f_mid) < tol:
-            return mid
+        if np.isnan(f_mid): return None
+        if abs(f_mid) < tol: return mid
         if f_lo * f_mid < 0:
             hi, f_hi = mid, f_mid
         else:
@@ -75,8 +67,7 @@ def discounted_payback(cashflows: list[float], rate: float):
         disc.append(cum)
     for k, v in enumerate(disc):
         if v >= 0:
-            if k == 0:
-                return 0.0
+            if k == 0: return 0.0
             prev = disc[k - 1]
             frac = 0.0 if v == prev else (-prev) / (v - prev)
             return (k - 1) + max(0.0, min(1.0, frac))
@@ -86,18 +77,17 @@ def won_formatter(x, pos):
     return f"{int(x):,}"
 
 # =========================
-# 3) CSV → 연도별 PV kWh 계산
+# 3) CSV → 연도별 PV kWh 계산 (일사합)
 # =========================
 def load_irradiance_csv(csv_path: str) -> pd.DataFrame:
     """
     연도별 '일사합(MJ/m²)' CSV를 읽어 표준 컬럼으로 정리:
-      - year  : ['연도', 'year', '일시'] 중 하나
-      - ghi_mj_m2 : ['일사합(mj/m2)', '일사합(mj/m²)', 'ghi_mj', 'ghi(mj/m2)'] 등
-    반환 DF: ['year', 'ghi_mj_m2']
+      - year        : ['연도','year','일시'] 중 하나
+      - ghi_mj_m2   : ['일사합(mj/m2)','일사합(mj/m²)','ghi_mj','ghi(mj/m2)' ...]
+    반환 DF: ['year','ghi_mj_m2']
     """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"CSV가 없음: {csv_path}")
-
     tried = []
     for enc in ["utf-8-sig", "cp949"]:
         try:
@@ -111,33 +101,24 @@ def load_irradiance_csv(csv_path: str) -> pd.DataFrame:
 
     df.columns = [str(c).strip().lower() for c in df.columns]
 
-    # 연도
     year_candidates = ["연도", "year", "일시"]
     year_col = next((c for c in year_candidates if c in df.columns), None)
     if year_col is None:
         raise ValueError(f"[연도 컬럼 없음] 실제 열: {list(df.columns)}")
 
-    # 일사합
     ghi_candidates = [
         "일사합(mj/m2)", "일사합(mj/m²)", "ghi_mj", "ghi(mj/m2)", "ghi(mj/m²)",
         "solar_mj", "solar(mj/m2)"
     ]
-    ghi_col = next((c for c in df.columns if c in ghi_candidates), None)
+    ghi_col = next((c for c in ghi_candidates if c in df.columns), None)
     if ghi_col is None:
         maybe = [c for c in df.columns if ("mj" in c and "m" in c)]
         raise ValueError(f"[일사합 컬럼 없음] 실제 열: {list(df.columns)} / 유사: {maybe}")
 
-    # '일시'가 연도라면 숫자만 추출
-    year_series = df[year_col]
-    if year_col == "일시":
-        # 첫 4자리(연도) 파싱 시도
-        year_series = pd.to_numeric(year_series.astype(str).str.slice(0,4), errors="coerce")
-
     out = pd.DataFrame({
-        "year": pd.to_numeric(year_series, errors="coerce"),
+        "year": pd.to_numeric(df[year_col], errors="coerce"),
         "ghi_mj_m2": pd.to_numeric(df[ghi_col], errors="coerce")
     }).dropna()
-
     out["year"] = out["year"].astype(int)
     return out.sort_values("year").reset_index(drop=True)
 
@@ -164,88 +145,167 @@ def compute_pv_kwh_by_year(irr_df: pd.DataFrame,
     return out, area_m2, PR
 
 # =========================
-# 4) SMP(시간대 단가) 로딩 → 연도별 평균 단가
+# 4) SMP(시간대별 단가) 처리
 # =========================
-def load_smp_series(csv_path: str) -> dict | None:
+def load_smp_series(csv_path: str) -> pd.Series:
     """
-    SMP.csv를 읽어 연도별 평균 단가(원/kWh) dict 반환.
-    허용 헤더:
-      - 단일 일시형:  '일시' + ('SMP' | '가격' | '단가')
-      - 분리형:     ('일자' + '시간') + ('SMP' | '가격' | '단가')
-    시간대 단가는 숫자로 파싱, 1시간 리샘플(평균), 연도별 평균 계산.
-    실패 시 None 반환(코드가 자동으로 기본 단가 방식으로 대체).
+    SMP.csv (기간, 01시~24시, 최대, 최소, 가중평균 형식)를 읽어
+    시간별 SMP 시리즈(원/kWh)로 변환.
     """
     if not os.path.exists(csv_path):
-        return None
+        raise FileNotFoundError(f"SMP CSV가 없음: {csv_path}")
 
+    # 인코딩 탐색
     for enc in ["utf-8-sig", "cp949"]:
         try:
             df = pd.read_csv(csv_path, encoding=enc)
             break
         except Exception:
             df = None
-    if df is None or df.empty:
-        return None
+    if df is None:
+        raise RuntimeError("SMP CSV 읽기 실패")
 
-    cols = [str(c).strip().lower() for c in df.columns]
-    df.columns = cols
+    # 열 이름 정리
+    df.columns = [str(c).strip() for c in df.columns]
+    date_col = next((c for c in df.columns if "기간" in c or "date" in c.lower()), None)
+    if date_col is None:
+        raise ValueError("‘기간’ 또는 날짜 열을 찾을 수 없습니다.")
 
-    # 가격 컬럼 찾기
-    price_aliases = ["smp", "가격", "단가", "price", "smp(원/kwh)"]
-    price_col = next((c for c in cols if c in price_aliases), None)
-    if price_col is None:
-        return None
+    # melt로 wide → long 변환
+    hour_cols = [c for c in df.columns if any(str(i).zfill(2) in c for i in range(1,25))]
+    df_long = df.melt(id_vars=[date_col], value_vars=hour_cols,
+                      var_name="hour", value_name="price")
 
-    # 일시/일자/시간 찾기
-    datetime_aliases = ["일시", "date", "날짜", "datetime", "timestamp"]
-    date_only_aliases = ["일자", "date", "날짜", "기준일"]
-    time_only_aliases = ["시간", "hour", "time", "시각"]
+    # 날짜 + 시각 결합
+    def parse_datetime(row):
+        h = str(row["hour"]).replace("시", "").strip()
+        try:
+            h_int = int(h)
+        except:
+            return pd.NaT
+        return pd.to_datetime(f"{row[date_col]} {h_int:02d}:00", errors="coerce")
 
-    dt_col = next((c for c in cols if c in datetime_aliases), None)
-    date_col = next((c for c in cols if c in date_only_aliases), None)
-    time_col = next((c for c in cols if c in time_only_aliases), None)
+    df_long["dt"] = df_long.apply(parse_datetime, axis=1)
+    df_long["price"] = pd.to_numeric(df_long["price"], errors="coerce")
 
-    try:
-        if dt_col is not None:
-            # 단일 일시
-            dt = pd.to_datetime(df[dt_col], errors="coerce")
-        elif (date_col is not None) and (time_col is not None):
-            # 분리형
-            # 시간 값이 0~23 또는 '00:00'일 수 있음
-            t_series = df[time_col].astype(str)
-            # '24'를 '00:00'으로 교정
-            t_series = t_series.replace({'24':'00','24:00':'00:00'})
-            dt = pd.to_datetime(df[date_col].astype(str) + " " + t_series, errors="coerce")
-        else:
-            return None
+    df_long = df_long.dropna(subset=["dt", "price"])
+    df_long = df_long.sort_values("dt")
 
-        s = pd.Series(pd.to_numeric(df[price_col], errors="coerce").values, index=dt)
-        s = s.dropna()
-        if s.empty:
-            return None
+    s = df_long.set_index("dt")["price"]
 
-        # 타임존 정리
-        if s.index.tz is None:
-            s.index = s.index.tz_localize(KST, nonexistent='shift_forward', ambiguous='NaT')
-        else:
-            s = s.tz_convert(KST)
+    # 리샘플링/보간/타임존
+    s = s.resample("1H").mean().interpolate("time").ffill().bfill()
+    if s.index.tz is None:
+        s.index = s.index.tz_localize("Asia/Seoul", nonexistent="shift_forward", ambiguous="NaT")
 
-        # 시간 단위로 리샘플(평균)
-        s_hourly = s.resample("1H").mean().ffill()
+    return s  # Series(dt → SMP[원/kWh])
 
-        # 연도별 평균 단가(원/kWh)
-        df_year = s_hourly.to_frame("price").reset_index()
-        df_year["year"] = df_year["index"].dt.year
-        yearly = df_year.groupby("year")["price"].mean().dropna()
-        smp_by_year = {int(k): float(v) for k, v in yearly.items()}
 
-        return smp_by_year
-
-    except Exception:
-        return None
+def escalate_series_by_cagr(base_series: pd.Series, base_year: int, year: int, cagr: float) -> pd.Series:
+    """대표연도 시계열을 해당 연도로 스케일(가격 × (1+CAGR)^(Δt))"""
+    factor = (1.0 + cagr) ** (year - base_year)
+    s = base_series.copy()
+    # 연도만 교체(월/일/시 유지)
+    s.index = s.index.map(lambda t: t.replace(year=year))
+    return s * factor
 
 # =========================
-# 5) 기본 파라미터
+# 5) 시간 분해: PV·V2G 시리즈 만들기
+# =========================
+def build_pv_hourly_series(year: int, annual_pv_kwh: float) -> pd.Series:
+    """연간 kWh를 1시간 해상도로 분배(간단 월×시간 가중치)"""
+    idx = pd.date_range(f"{year}-01-01", f"{year+1}-01-01", freq="1H", tz="Asia/Seoul", inclusive="left")
+    df = pd.DataFrame(index=idx)
+
+    # 월별 가중치(예시). 필요하면 실제 월별 일사/발전 비중으로 교체
+    month_weights = np.array([0.06,0.07,0.08,0.09,0.10,0.11,0.12,0.11,0.10,0.08,0.05,0.03])
+    month_weights = month_weights / month_weights.sum()
+    df["m_w"] = [month_weights[t.month-1] for t in df.index]
+
+    # 일중 가중치: 7~18시만 발전(정오 피크)
+    hour = df.index.hour
+    daytime = ((hour>=7)&(hour<=18)).astype(int)
+    t = (hour-7) / (18-7)
+    shape = np.where(daytime==1, np.sin(np.pi * t), 0.0)
+    shape[shape<0]=0.0
+    df["h_w"] = shape
+
+    w = df["m_w"] * df["h_w"]
+    if w.sum() == 0:
+        return pd.Series(0.0, index=idx)
+    return (w / w.sum()) * annual_pv_kwh
+
+def pv_export_series(pv_hourly_kwh: pd.Series, self_use_ratio: float) -> pd.Series:
+    return pv_hourly_kwh * (1.0 - self_use_ratio)
+
+def build_v2g_hourly_series(year: int,
+                            num_chargers: int,
+                            kwh_per_charger_day: float,
+                            operating_days: int,
+                            degradation: float,
+                            discharge_hours=(17,18,19,20,21),
+                            price_weighted: bool=False,
+                            smp_for_year: pd.Series|None=None) -> pd.Series:
+    """
+    하루 방전량 = (#충전기 × 1대당 일일방전량 × 열화계수).
+    기본은 선택한 시간대에 균등 분배.
+    price_weighted=True면 같은 날 SMP 비례로 분배.
+    """
+    idx = pd.date_range(f"{year}-01-01", f"{year+1}-01-01", freq="1H", tz="Asia/Seoul", inclusive="left")
+    s = pd.Series(0.0, index=idx)
+
+    E_day = num_chargers * kwh_per_charger_day * degradation
+    days = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D", tz="Asia/Seoul")
+
+    # 단순히 앞에서부터 operating_days일만 운전(원하면 평일만/무작위 등으로 바꿔도 됨)
+    ops_mask = pd.Series(0, index=days)
+    ops_mask.iloc[:min(operating_days, len(ops_mask))] = 1
+
+    H = len(discharge_hours)
+    for day, active in ops_mask.items():
+        if active != 1 or H == 0:
+            continue
+
+        hours_ts = [day + pd.Timedelta(hours=h) for h in discharge_hours]
+
+        if price_weighted and smp_for_year is not None:
+            # 해당 일자 SMP 합으로 비례 분배
+            prices = []
+            for t in hours_ts:
+                if t in smp_for_year.index:
+                    prices.append(float(smp_for_year.loc[t]))
+                else:
+                    # 존재 안 하면 가까운 값 사용
+                    nearest = smp_for_year.index.get_indexer([t], method="nearest")
+                    prices.append(float(smp_for_year.iloc[nearest[0]]))
+            prices = np.array(prices, dtype=float)
+            weights = prices / prices.sum() if prices.sum() > 0 else np.ones_like(prices)/len(prices)
+        else:
+            weights = np.ones(H) / H
+
+        for t, w in zip(hours_ts, weights):
+            # 인덱스 존재 보정
+            if t not in s.index:
+                # 근접 시간으로 매핑
+                nearest = s.index.get_indexer([t], method="nearest")
+                t = s.index[nearest[0]]
+            s.loc[t] += E_day * float(w)
+
+    return s
+
+def revenue_from_smp(smp_price: pd.Series,
+                     pv_export: pd.Series,
+                     v2g_discharge: pd.Series) -> tuple[float, float]:
+    """(총수익, PV수익만) 반환. 둘 다 원 단위."""
+    s = smp_price.astype(float)
+    pv = pv_export.reindex(s.index, method="nearest").fillna(0.0)
+    v2g = v2g_discharge.reindex(s.index, method="nearest").fillna(0.0)
+    pv_rev   = float((pv  * s).sum())
+    total_rev= float(((pv+v2g) * s).sum())
+    return total_rev, pv_rev
+
+# =========================
+# 6) 기본 파라미터
 # =========================
 def make_v2g_model_params():
     return {
@@ -256,33 +316,30 @@ def make_v2g_model_params():
         "v2g_daily_discharge_per_charger_kwh": 35,
         "degradation_factor": 0.9,
         "v2g_operating_days": 300,
-        # 단가(연복리 상승)
+        # 단가(연복리 상승; SMP를 쓰면 SMP에 적용)
         "tariff_base_year": 2025,
-        "pv_base_price": 160,             # 원/kWh
-        "v2g_price_gap": 30,
+        "pv_base_price": 160,             # (미사용: SMP 사용 시)
+        "v2g_price_gap": 30,              # (미사용: SMP 사용 시)
         "price_cagr": 0.043,
         # O&M
         "om_ratio": 0.015,
     }
 
 # =========================
-# 6) 현금흐름 빌드 (CSV + SMP 반영)
+# 7) 현금흐름 빌드
+#   - SMP가 있으면 시간대별로 수익 산출
+#   - 없으면 기존 단가(고정/연상승) 방식으로 계산
 # =========================
 def build_yearly_cashflows_from_csv(install_year: int, current_year: int, p: dict,
                                     pv_kwh_by_year: dict,
-                                    smp_by_year: dict | None):
-    """
-    pv_kwh_by_year: {year: PV 연간 kWh}
-    smp_by_year:    {year: SMP 평균단가 원/kWh} (없으면 None → 기본단가 방식)
-    """
-    # V2G(연간 고정 kWh) — 필요 시 PV 잉여량과 연동하는 상한 로직 추가 가능
-    daily_v2g_kwh = p["num_v2g_chargers"] * p["v2g_daily_discharge_per_charger_kwh"]
-    annual_v2g_kwh = daily_v2g_kwh * p["v2g_operating_days"] * p["degradation_factor"]
+                                    smp_base_series: pd.Series|None = None,
+                                    smp_base_year: int|None = None,
+                                    use_price_weighted_v2g: bool = True):
+    # 공통 비용요소
+    capex_total   = p["num_v2g_chargers"] * p["v2g_charger_unit_cost"]
+    annual_om_cost= capex_total * p["om_ratio"]
+    self_use      = float(p["self_use_ratio"])
 
-    capex_total = p["num_v2g_chargers"] * p["v2g_charger_unit_cost"]
-    annual_om_cost = capex_total * p["om_ratio"]
-
-    self_use = float(p["self_use_ratio"])
     years = list(range(install_year, current_year + 1))
     yearly_cash, cumulative = [], []
     pv_revenues, v2g_revenues, om_costs, capex_list = [], [], [], []
@@ -292,40 +349,66 @@ def build_yearly_cashflows_from_csv(install_year: int, current_year: int, p: dic
     min_y, max_y = min(pv_kwh_by_year.keys()), max(pv_kwh_by_year.keys())
 
     cum = 0.0
+
+    # V2G 연간 kWh “상한”은 동일하지만, 시간대 배치에 따라 '수익'이 달라짐.
+    # 시간단 SMP가 없다면 기존 평균단가 방식으로 계산.
     for i, year in enumerate(years):
-        # PV kWh: 범위 밖이면 경계값 사용(보수적)
+        # PV 연간 kWh (범위 밖은 경계값)
         y_key = min(max(year, min_y), max_y)
         annual_pv_kwh = pv_kwh_by_year[y_key]
-        annual_pv_surplus_kwh = annual_pv_kwh * (1 - self_use)
+        # 연간 PV → 시간분해 → 자가소비 반영
+        pv_hourly = build_pv_hourly_series(year, annual_pv_kwh)
+        pv_export = pv_export_series(pv_hourly, self_use)
 
-        # 단가 결정
-        if smp_by_year and (year in smp_by_year):
-            pv_price_y = float(smp_by_year[year])                  # SMP를 PV 매출단가로 사용
+        # V2G 시간 분해
+        if smp_base_series is not None and smp_base_year is not None:
+            smp_y = escalate_series_by_cagr(smp_base_series, smp_base_year, year, p["price_cagr"])
+            def escalate_series_by_cagr(base_series: pd.Series, base_year: int, year: int, cagr: float) -> pd.Series:
+                factor = (1.0 + cagr) ** (year - base_year)
+                return base_series * factor
+
+            v2g_hourly = build_v2g_hourly_series(
+                year,
+                p["num_v2g_chargers"],
+                p["v2g_daily_discharge_per_charger_kwh"],
+                p["v2g_operating_days"],
+                p["degradation_factor"],
+                price_weighted=use_price_weighted_v2g,
+                smp_for_year=smp_y if use_price_weighted_v2g else None
+            )
+            total_rev_y, pv_rev_y = revenue_from_smp(smp_y, pv_export, v2g_hourly)
+            v2g_rev_y = total_rev_y - pv_rev_y
         else:
-            pv_price_y = price_with_cagr(p["pv_base_price"], p["tariff_base_year"], year, p["price_cagr"])
-        v2g_price_y = pv_price_y + p["v2g_price_gap"]
+            # (백업) 평균단가 방식
+            annual_pv_surplus_kwh = annual_pv_kwh * (1 - self_use)
+            daily_v2g_kwh = p["num_v2g_chargers"] * p["v2g_daily_discharge_per_charger_kwh"]
+            annual_v2g_kwh = daily_v2g_kwh * p["v2g_operating_days"] * p["degradation_factor"]
 
-        # 매출
-        revenue_pv_y = annual_pv_surplus_kwh * pv_price_y
-        revenue_v2g_y = annual_v2g_kwh * v2g_price_y
-        annual_revenue_y = revenue_pv_y + revenue_v2g_y
+            pv_price_y  = price_with_cagr(p["pv_base_price"], p["tariff_base_year"], year, p["price_cagr"])
+            v2g_price_y = pv_price_y + p["v2g_price_gap"]
 
-        # 비용
-        om_y = annual_om_cost
-        capex_y = capex_total if i == 0 else 0
+            pv_rev_y  = annual_pv_surplus_kwh * pv_price_y
+            v2g_rev_y = annual_v2g_kwh       * v2g_price_y
+            total_rev_y = pv_rev_y + v2g_rev_y
 
-        # 순현금흐름
-        cf = annual_revenue_y - om_y - capex_y
-        cum += cf
+        om_y    = annual_om_cost
+        capex_y = capex_total if i == 0 else 0.0
+        cf_y    = total_rev_y - om_y - capex_y
+        cum    += cf_y
 
-        yearly_cash.append(cf)
+        yearly_cash.append(cf_y)
         cumulative.append(cum)
-        pv_revenues.append(revenue_pv_y)
-        v2g_revenues.append(revenue_v2g_y)
+        pv_revenues.append(pv_rev_y)
+        v2g_revenues.append(v2g_rev_y)
         om_costs.append(om_y)
         capex_list.append(capex_y)
 
+    # 탄소절감 kWh는 평균치로(단순화)
     avg_pv_surplus_kwh = np.mean([pv_kwh_by_year[min(max(y, min_y), max_y)] * (1 - self_use) for y in years])
+
+    # V2G 연간 kWh(정보 표시에만 사용)
+    daily_v2g_kwh = p["num_v2g_chargers"] * p["v2g_daily_discharge_per_charger_kwh"]
+    annual_v2g_kwh = daily_v2g_kwh * p["v2g_operating_days"] * p["degradation_factor"]
 
     return {
         "years": years,
@@ -335,31 +418,29 @@ def build_yearly_cashflows_from_csv(install_year: int, current_year: int, p: dic
         "v2g_revenues": v2g_revenues,
         "om_costs": om_costs,
         "capex_list": capex_list,
-        "annual_pv_surplus_kwh": avg_pv_surplus_kwh,  # 보고용 평균
+        "annual_pv_surplus_kwh": avg_pv_surplus_kwh,
         "annual_v2g_kwh": annual_v2g_kwh,
     }
 
 # =========================
-# 7) Streamlit App
+# 8) Streamlit App
 # =========================
 def main():
-    st.title("V2G + PV 경제성 (일사합 CSV + 시간대별 SMP 반영)")
+    st.title("V2G 투자 대비 연도별/누적 현금흐름 (CSV 일사합 + 시간대별 SMP 옵션)")
 
-    # --- 고정 파일 경로 (사이드바에 경로 노출 없음) ---
+    # ── 파일 경로(사이드바에 노출 안 함): 레포 루트에 파일 배치 ──
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    irr_csv_path = os.path.join(base_dir, "jeju.csv")   # 일사합 CSV
-    smp_csv_path = os.path.join(base_dir, "SMP.csv")    # SMP CSV (선택)
+    irr_csv_path = os.path.join(base_dir, "jeju.csv")  # 일사합
+    smp_csv_path = os.path.join(base_dir, "SMP.csv")   # SMP(시간대별 단가)
 
-    # --- 사이드바: 시스템 설정 ---
-    st.sidebar.header("시스템/운영 입력")
-
-    # 모듈/면적/PR
+    # ① 모듈/면적/PR
+    st.sidebar.header("시스템 설정")
     c1, c2 = st.sidebar.columns(2)
-    panel_w = c1.number_input("패널 폭(m)", value=1.46, step=0.01, format="%.2f")
-    panel_h = c2.number_input("패널 높이(m)", value=0.98, step=0.01, format="%.2f")
+    panel_w   = c1.number_input("패널 폭(m)", value=1.46, step=0.01, format="%.2f")
+    panel_h   = c2.number_input("패널 높이(m)", value=0.98, step=0.01, format="%.2f")
     n_modules = st.sidebar.number_input("모듈 수(장)", value=250, step=5, min_value=1)
 
-    st.sidebar.caption("PR은 고정 계수(기본) 또는 직접 지정(수동) 중 선택")
+    st.sidebar.caption("PR은 고정 계수(기본) 또는 사용자가 직접 지정")
     use_manual_pr = st.sidebar.checkbox("PR 수동 지정", value=False)
     if use_manual_pr:
         pr_manual = st.sidebar.number_input("PR (0~1)", value=0.78, min_value=0.0, max_value=1.0, step=0.01)
@@ -367,31 +448,36 @@ def main():
         pr_manual = None
     pr_base, availability, soiling, inv_eff = 0.82, 0.98, 0.02, 0.97
 
-    # 시뮬레이션 기간/요금/비율
+    # ② 시뮬레이션 기간/요금/비율
+    st.sidebar.header("시뮬레이션/정산 설정")
     install_year = st.sidebar.number_input("설치 연도", value=2025, step=1)
     current_year = st.sidebar.number_input("마지막 연도", value=2045, step=1, min_value=install_year)
 
     params = make_v2g_model_params()
-
-    # ── V2G 항목 (유지) ──
-    params["num_v2g_chargers"] = st.sidebar.number_input(
-        "V2G 충전기 대수", value=params["num_v2g_chargers"], step=1, min_value=1
-    )
+    params["num_v2g_chargers"] = st.sidebar.number_input("V2G 충전기 대수", value=params["num_v2g_chargers"], step=1, min_value=1)
     params["v2g_daily_discharge_per_charger_kwh"] = st.sidebar.number_input(
         "1대당 일일 방전량 (kWh)", value=params["v2g_daily_discharge_per_charger_kwh"], step=1, min_value=1
     )
     params["v2g_operating_days"] = st.sidebar.number_input(
         "연간 운영일 수", value=params["v2g_operating_days"], step=10, min_value=1, max_value=365
     )
+    # 열화율 노출 원하면 주석 해제
+    # params["degradation_factor"] = st.sidebar.number_input("열화·가용 보정", value=params["degradation_factor"], min_value=0.0, max_value=1.0, step=0.01)
 
     params["self_use_ratio"] = st.sidebar.slider("PV 자가소비 비율", 0.0, 1.0, params["self_use_ratio"], 0.05)
-    params["pv_base_price"] = st.sidebar.number_input("PV 기준단가 (원/kWh)", value=params["pv_base_price"], step=5, min_value=0)
-    params["price_cagr"] = st.sidebar.number_input("전력단가 연평균 상승률", value=params["price_cagr"], step=0.001, format="%.3f")
+
+    # SMP 사용 옵션 (가격 연상승률은 SMP에 적용)
+    use_smp = st.sidebar.checkbox("시간대별 SMP로 정산", value=True)
+    params["price_cagr"] = st.sidebar.number_input("단가 연평균 상승률(CAGR)", value=params["price_cagr"], step=0.001, format="%.3f")
+    smp_base_year = st.sidebar.number_input("SMP 기준 연도(스케일 기준)", value=2024, step=1)
+
+    # V2G 방전 전략
+    v2g_price_weighted = st.sidebar.checkbox("V2G 가격가중 방전(비싼 시간대 더 많이)", value=True)
 
     # 재무 지표용 할인율
     discount_rate = st.sidebar.number_input("할인율(연)", value=0.08, min_value=0.0, max_value=0.5, step=0.005, format="%.3f")
 
-    # --- CSV 로드 & PV 연간 kWh 계산 ---
+    # ── CSV 로드 & PV 연간 kWh 계산 ──
     irr_df = load_irradiance_csv(irr_csv_path)
     pv_by_year, area_m2, PR_used = compute_pv_kwh_by_year(
         irr_df,
@@ -400,25 +486,34 @@ def main():
         pr_manual=pr_manual
     )
 
-    # --- SMP 로드 (있으면 사용, 없으면 기본단가) ---
-    smp_by_year = load_smp_series(smp_csv_path)
-    if smp_by_year is None:
-        st.info("SMP를 읽지 못해 **기본 단가(기준단가 + CAGR)** 방식으로 계산합니다. "
-                "SMP.csv 헤더는 `일시,SMP` 또는 `일자,시간,SMP` 형태를 권장합니다.")
+    # ── SMP 시계열 준비(옵션) ──
+    smp_series = None
+    if use_smp:
+        try:
+            smp_series = load_smp_series(smp_csv_path)
+        except Exception as e:
+            st.warning(f"SMP 읽기 실패: {e}\n→ SMP 미사용 방식으로 대체 계산합니다.")
+            smp_series = None
+            use_smp = False
 
-    # --- 현금흐름 계산 ---
-    cf = build_yearly_cashflows_from_csv(install_year, current_year, params, pv_by_year, smp_by_year)
-    years = cf["years"]
+    # ── 현금흐름 계산 ──
+    cf = build_yearly_cashflows_from_csv(
+        install_year, current_year, params, pv_by_year,
+        smp_base_series=smp_series if use_smp else None,
+        smp_base_year=smp_base_year if use_smp else None,
+        use_price_weighted_v2g=v2g_price_weighted
+    )
+    years       = cf["years"]
     yearly_cash = cf["yearly_cash"]
-    cumulative = cf["cumulative"]
+    cumulative  = cf["cumulative"]
 
     # 손익분기 연도
     break_even_year = next((y for y, cum in zip(years, cumulative) if cum >= 0), None)
 
-    # 탄소절감량(kgCO2e)
+    # 탄소절감량(kgCO2e) – 평균 연간 kWh로 추정
     clean_kwh_per_year = cf["annual_pv_surplus_kwh"] + cf["annual_v2g_kwh"]
-    total_clean_kwh = clean_kwh_per_year * len(years)
-    total_co2_kg = total_clean_kwh * EMISSION_FACTOR_KG_PER_KWH
+    total_clean_kwh    = clean_kwh_per_year * len(years)
+    total_co2_kg       = total_clean_kwh * EMISSION_FACTOR_KG_PER_KWH
 
     # 재무지표
     npv_val = npv(discount_rate, yearly_cash)
@@ -460,7 +555,7 @@ def main():
     ax.set_xlabel("연도"); ax.set_ylabel("누적 금액(원)")
     ax.yaxis.set_major_formatter(FuncFormatter(won_formatter))
     ax.grid(True, linestyle="--", alpha=0.4)
-    ax.set_title("V2G + PV 누적 현금흐름")
+    ax.set_title("V2G + PV 누적 현금흐름" + (" (SMP 정산)" if use_smp else ""))
     if break_even_year is not None:
         ax.axvline(break_even_year, color="green", linestyle="--", alpha=0.7)
         ax.text(break_even_year, 0, f"손익분기 {break_even_year}", color="green", va="bottom", ha="left")
@@ -498,14 +593,11 @@ def main():
     st.dataframe(df_table, use_container_width=True)
 
     # 참고 정보
-    csv_years = f"{min(pv_by_year.keys())}~{max(pv_by_year.keys())}"
-    if smp_by_year:
-        smp_years = f"{min(smp_by_year.keys())}~{max(smp_by_year.keys())}"
-        st.caption(f"총 모듈 면적: {area_m2:.1f} m² | 사용 PR: {PR_used:.3f} | "
-                   f"일사합 CSV 연도 범위: {csv_years} | SMP 연도 범위: {smp_years}")
-    else:
-        st.caption(f"총 모듈 면적: {area_m2:.1f} m² | 사용 PR: {PR_used:.3f} | "
-                   f"일사합 CSV 연도 범위: {csv_years} | SMP 미사용(기본 단가)")
+    st.caption(
+        f"총 모듈 면적: {area_m2:.1f} m² | 사용 PR: {PR_used:.3f} "
+        f"| CSV(일사합) 연도 범위: {min(pv_by_year.keys())}~{max(pv_by_year.keys())} "
+        f"| 정산: {'SMP(시간대별)' if use_smp else '평균단가'}"
+    )
 
 if __name__ == "__main__":
     main()
