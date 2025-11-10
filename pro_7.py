@@ -194,7 +194,7 @@ def load_smp_series(csv_path: str) -> pd.Series:
     s = df_long.set_index("dt")["price"]
 
     # 리샘플링/보간/타임존
-    s = s.resample("1H").mean().interpolate("time").ffill().bfill()
+    s = s.resample("1h").mean().interpolate("time").ffill().bfill()
     if s.index.tz is None:
         s.index = s.index.tz_localize("Asia/Seoul", nonexistent="shift_forward", ambiguous="NaT")
 
@@ -578,7 +578,7 @@ def main():
                                text=f"손익분기 {break_even_year}년", showarrow=False, yanchor="bottom",
                                font=dict(color="green"))
     bar_fig.update_layout(title="연도별 순현금흐름 (누적)", yaxis=dict(tickformat=","), bargap=0.25)
-    st.plotly_chart(bar_fig, use_container_width=True)
+    st.plotly_chart(bar_fig, width=True)
 
     # --- 표: 연도별 금액 ---
     st.subheader("연도별 금액 확인")
