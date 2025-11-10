@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-os.write(1,)
 import streamlit as st
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
